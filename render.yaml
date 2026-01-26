@@ -2,11 +2,11 @@ services:
   - type: web
     name: fayda-id-bot
     env: python
-    buildCommand: |
-      apt-get update && apt-get install -y poppler-utils
-      pip install -r requirements.txt
+    region: oregon  # or frankfurt
+    buildCommand: pip install -r requirements.txt
     startCommand: python keep_alive.py
     envVars:
       - key: BOT_TOKEN
         sync: false
     plan: free
+    pythonVersion: "3.11.0"  # 👈 THIS FORCES PYTHON 3.11
