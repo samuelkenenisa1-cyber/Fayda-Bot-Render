@@ -2,7 +2,9 @@ services:
   - type: web
     name: fayda-id-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      apt-get update && apt-get install -y poppler-utils
+      pip install -r requirements.txt
     startCommand: python keep_alive.py
     envVars:
       - key: BOT_TOKEN
