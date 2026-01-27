@@ -7,4 +7,3 @@ numpy==1.26.4
 Flask==3.0.2
 requests==2.31.0
 pypdf==7.1.2
-
