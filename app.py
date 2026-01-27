@@ -10,14 +10,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from pyzbar.pyzbar import decode
 import io
-import base64
+from pypdf import PdfReader  # Changed from PyPDF2
 from datetime import datetime
-import telebot
+from telebot import TeleBot  # If using pytelegrambotapi
 from flask import Flask, request
 import logging
 import traceback
 import time
-import tempfile
 
 # ==================== CONFIGURATION ====================
 
@@ -107,37 +106,26 @@ def create_default_template():
 
 def extract_image_from_pdf(pdf_bytes):
     """
-    Extract image from PDF without pdf2image
-    Uses temp file and system commands as fallback
+    Extract image from PDF using pypdf (Python 3.13 compatible)
     """
     try:
-        # Method 1: Try to find any image in PDF
-        import PyPDF2
-        
         pdf_file = io.BytesIO(pdf_bytes)
-        reader = PyPDF2.PdfReader(pdf_file)
+        reader = PdfReader(pdf_file)
         
         if len(reader.pages) > 0:
             # Extract text for logging
             text = reader.pages[0].extract_text()
             logger.info(f"📄 PDF text found: {text[:100]}...")
-            
-            # Look for images in the PDF (simplified approach)
-            # For most ID cards, we'll rely on QR code extraction
         
-        # Create a placeholder image (will be replaced by actual processing)
+        # Create placeholder (same as before)
         placeholder = Image.new('RGB', (1200, 1600), color='white')
-        
-        # Add some text to indicate PDF loaded
         draw = ImageDraw.Draw(placeholder)
         draw.text((100, 100), "PDF Loaded Successfully", fill='black')
-        draw.text((100, 150), "Processing QR Code and Data...", fill='black')
         
         return placeholder
         
     except Exception as e:
-        logger.warning(f"⚠️ PDF image extraction failed: {e}")
-        # Return a blank image as fallback
+        logger.warning(f"⚠️ PDF processing failed: {e}")
         return Image.new('RGB', (1200, 1600), color='white')
 
 def find_qr_code_in_image(img):
@@ -519,3 +507,4 @@ if __name__ == '__main__':
         logger.info("💻 Running locally in polling mode")
         bot.remove_webhook()
         bot.polling(none_stop=True)
+
