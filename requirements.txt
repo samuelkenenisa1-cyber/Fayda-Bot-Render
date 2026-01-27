@@ -1,7 +1,7 @@
-# Python 3.13 fully compatible
+# Alternative if Pillow 10.3.0 fails
 pytelegrambotapi==4.20.0
-Pillow==10.3.0
-pyzbar==0.1.10
+Pillow==10.2.0  # Or 10.1.0
+pyzbar==0.1.9
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 Flask==3.0.2
