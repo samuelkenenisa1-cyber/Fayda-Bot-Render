@@ -1,9 +1,9 @@
-# Tested Python 3.13 packages
-pytelegrambotapi==4.20.0  # Instead of telebot
+# Python 3.13 fully compatible
+pytelegrambotapi==4.20.0
 Pillow==10.3.0
 pyzbar==0.1.10
 opencv-python-headless==4.9.0.80
 numpy==1.26.4
 Flask==3.0.2
 requests==2.31.0
-pypdf==7.1.2  # Instead of PyPDF2
+pypdf==7.1.2
