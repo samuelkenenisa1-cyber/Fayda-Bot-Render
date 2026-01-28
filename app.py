@@ -1,220 +1,95 @@
-"""
-Fayda Ethiopian Digital ID Bot
-Render.com SAFE version (Python 3.13)
-- No crash at import time
-- Lazy BOT_TOKEN loading
-- Webhook-based
-"""
-
 import os
 import io
-import json
-import time
-import logging
-import traceback
-from datetime import datetime
-
-from flask import Flask, request
 import telebot
-from telebot import types
+from telebot.types import Message
+from pdf2image import convert_from_bytes
+from PIL import Image
+from pyzbar.pyzbar import decode
 
-from PIL import Image, ImageDraw
-import numpy as np
-import cv2
-from pypdf import PdfReader
+# ================== CONFIG ==================
 
-# ===================== BASIC SETUP =====================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN environment variable not set")
+    exit(1)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("fayda-bot")
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-app = Flask(__name__)
+# ================== HELPERS ==================
 
-bot = None  # lazy init (VERY IMPORTANT)
-
-OUTPUT_DIR = "data"
-TEMPLATE_PATH = "template.png"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-# ===================== ENV SAFE =====================
-
-def get_bot_token():
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        logger.warning("⚠️ BOT_TOKEN not found yet")
-    return token
-
-
-def init_bot():
-    global bot
-    token = get_bot_token()
-    if not token:
-        raise RuntimeError("❌ BOT_TOKEN missing at runtime")
-    bot = telebot.TeleBot(token, parse_mode="Markdown")
-    logger.info("✅ Telegram bot initialized")
-
-
-# ===================== TEMPLATE =====================
-
-def create_template():
-    if os.path.exists(TEMPLATE_PATH):
-        return
-
-    img = Image.new("RGB", (1200, 800), "white")
-    d = ImageDraw.Draw(img)
-
-    d.rectangle((0, 0, 1200, 100), fill=(0, 122, 51))
-    d.text((600, 50), "ETHIOPIAN DIGITAL ID", fill="white", anchor="mm")
-
-    d.rectangle((50, 150, 350, 450), outline="black", width=3)
-    d.text((200, 470), "PHOTO", anchor="mm")
-
-    d.rectangle((850, 450, 1150, 750), outline="black", width=3)
-    d.text((1000, 760), "QR", anchor="mm")
-
-    img.save(TEMPLATE_PATH)
-    logger.info("✅ Template created")
-
-
-# ===================== QR HANDLING =====================
-
-def find_qr(img: Image.Image):
-    cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    detector = cv2.QRCodeDetector()
-
-    data, points, _ = detector.detectAndDecode(cv_img)
-    if data:
-        return data
-
-    return None
-
-
-# ===================== PDF PROCESS =====================
-
-def process_pdf(pdf_bytes, user_id):
-    # 1️⃣ Convert first page of PDF to image
-    images = convert_from_bytes(
-    pdf_bytes,
-    dpi=200,
-    first_page=1,
-    last_page=1,
-    poppler_path="/usr/bin"
-)
-if not images:
-    return None, "❌ PDF conversion failed (poppler issue)"
+def extract_qr_from_pdf(pdf_bytes: bytes):
+    """
+    Converts first page of PDF to image and scans for QR
+    Returns: (qr_data or None, error_message or None)
+    """
+    try:
+        images = convert_from_bytes(
+            pdf_bytes,
+            dpi=150,                 # low DPI = faster on Render Free
+            first_page=1,
+            last_page=1,
+            poppler_path="/usr/bin"  # REQUIRED on Render
+        )
+    except Exception as e:
+        return None, f"❌ PDF conversion failed: {e}"
 
     if not images:
-        return None, "❌ Could not read PDF"
+        return None, "❌ PDF conversion failed (no image generated)"
 
-    page_img = images[0]
+    img = images[0]
+    qr_codes = decode(img)
 
-    # 2️⃣ Find QR from actual PDF image
-    qr_data = find_qr(page_img)
-    if not qr_data:
+    if not qr_codes:
         return None, "❌ QR code not found in PDF"
 
-    # 3️⃣ Parse QR JSON
+    return qr_codes[0].data.decode("utf-8"), None
+
+# ================== BOT HANDLERS ==================
+
+@bot.message_handler(commands=["start"])
+def start(message: Message):
+    bot.reply_to(
+        message,
+        "👋 <b>Welcome to Fayda ID Bot</b>\n\n"
+        "📄 Send your Fayda PDF and I will extract the QR code."
+    )
+
+@bot.message_handler(content_types=["document"])
+def handle_pdf(message: Message):
+    if not message.document.file_name.lower().endswith(".pdf"):
+        bot.reply_to(message, "❌ Please send a PDF file.")
+        return
+
+    status = bot.reply_to(message, "⏳ Processing your PDF...")
+
     try:
-        data = json.loads(qr_data)
-    except Exception:
-        return None, "❌ QR content is not valid JSON"
-
-    # 4️⃣ Create ID
-    create_template()
-    template = Image.open(TEMPLATE_PATH).copy()
-    d = ImageDraw.Draw(template)
-
-    d.text((400, 200), f"Name: {data.get('fullName', 'N/A')}")
-    d.text((400, 250), f"ID: {data.get('nationalId', 'N/A')}")
-    d.text((400, 300), f"DOB: {data.get('dateOfBirth', 'N/A')}")
-
-    out = f"{OUTPUT_DIR}/id_{user_id}_{int(time.time())}.png"
-    template.save(out)
-
-    return out, data
-
-
-# ===================== BOT HANDLERS =====================
-
-def register_handlers():
-
-    @bot.message_handler(commands=["start", "help"])
-    def start(msg):
-        bot.reply_to(
-            msg,
-            "🪪 *FAYDA ID Bot*\n\nSend your FAYDA PDF and I’ll generate your ID card 🇪🇹",
-        )
-
-    @bot.message_handler(content_types=["document"])
-    def handle_pdf(msg):
-        if not msg.document.file_name.lower().endswith(".pdf"):
-            bot.reply_to(msg, "❌ Please send a PDF file")
-            return
-
-        file_info = bot.get_file(msg.document.file_id)
+        file_info = bot.get_file(message.document.file_id)
         pdf_bytes = bot.download_file(file_info.file_path)
 
-        status = bot.reply_to(msg, "⏳ Processing your PDF...")
+        qr_data, error = extract_qr_from_pdf(pdf_bytes)
 
-        result, info = process_pdf(pdf_bytes, msg.chat.id)
-
-        if not result:
-            bot.edit_message_text(info, msg.chat.id, status.message_id)
+        if error:
+            bot.edit_message_text(
+                error,
+                chat_id=message.chat.id,
+                message_id=status.message_id
+            )
             return
 
-        with open(result, "rb") as f:
-            bot.send_photo(msg.chat.id, f, caption="✅ ID Generated")
-
-        os.remove(result)
-        bot.delete_message(msg.chat.id, status.message_id)
-
-
-# ===================== FLASK ROUTES =====================
-
-@app.route("/")
-def home():
-    return "✅ Fayda ID Bot is running"
-
-
-@app.route("/health")
-def health():
-    return {"status": "ok", "time": datetime.now().isoformat()}
-
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    if request.headers.get("content-type") == "application/json":
-        update = telebot.types.Update.de_json(
-            request.get_data().decode("utf-8")
+        bot.edit_message_text(
+            "✅ <b>QR Code Found</b>\n\n<code>{}</code>".format(qr_data),
+            chat_id=message.chat.id,
+            message_id=status.message_id
         )
-        bot.process_new_updates([update])
-        return "", 200
-    return "invalid", 403
 
+    except Exception as e:
+        bot.edit_message_text(
+            f"❌ Unexpected error: {e}",
+            chat_id=message.chat.id,
+            message_id=status.message_id
+        )
 
-# ===================== MAIN =====================
+# ================== RUN ==================
 
-if __name__ == "__main__":
-    print("🔎 ENV KEYS:", list(os.environ.keys()))
-
-    init_bot()
-    register_handlers()
-
-    if os.environ.get("RENDER"):
-        bot.remove_webhook()
-        time.sleep(1)
-
-        url = os.environ.get("RENDER_EXTERNAL_URL")
-        if url:
-            bot.set_webhook(f"{url}/webhook")
-            logger.info(f"🔗 Webhook set: {url}/webhook")
-
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port)
-
-    else:
-        bot.remove_webhook()
-        bot.infinity_polling()
-
-
+print("🤖 Fayda Bot is running...")
+bot.infinity_polling(timeout=30, long_polling_timeout=30)
