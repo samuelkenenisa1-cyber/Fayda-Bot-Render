@@ -93,30 +93,38 @@ def find_qr(img: Image.Image):
 # ===================== PDF PROCESS =====================
 
 def process_pdf(pdf_bytes, user_id):
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    # 1️⃣ Convert first page of PDF to image
+    images = convert_from_bytes(
+        pdf_bytes,
+        dpi=300,
+        first_page=1,
+        last_page=1
+    )
 
-    page = reader.pages[0]
-    text = page.extract_text() or ""
+    if not images:
+        return None, "❌ Could not read PDF"
 
-    img = Image.new("RGB", (1000, 1400), "white")
-    draw = ImageDraw.Draw(img)
-    draw.text((50, 50), "PDF Loaded", fill="black")
+    page_img = images[0]
 
-    qr_data = find_qr(img)
+    # 2️⃣ Find QR from actual PDF image
+    qr_data = find_qr(page_img)
     if not qr_data:
-        return None, "❌ QR code not found"
+        return None, "❌ QR code not found in PDF"
 
+    # 3️⃣ Parse QR JSON
     try:
         data = json.loads(qr_data)
     except Exception:
-        return None, "❌ QR data is not valid JSON"
+        return None, "❌ QR content is not valid JSON"
 
+    # 4️⃣ Create ID
     create_template()
     template = Image.open(TEMPLATE_PATH).copy()
     d = ImageDraw.Draw(template)
 
-    d.text((400, 200), f"Name: {data.get('fullName','N/A')}")
-    d.text((400, 250), f"ID: {data.get('nationalId','N/A')}")
+    d.text((400, 200), f"Name: {data.get('fullName', 'N/A')}")
+    d.text((400, 250), f"ID: {data.get('nationalId', 'N/A')}")
+    d.text((400, 300), f"DOB: {data.get('dateOfBirth', 'N/A')}")
 
     out = f"{OUTPUT_DIR}/id_{user_id}_{int(time.time())}.png"
     template.save(out)
@@ -205,3 +213,4 @@ if __name__ == "__main__":
     else:
         bot.remove_webhook()
         bot.infinity_polling()
+
