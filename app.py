@@ -1,3 +1,4 @@
+print("✅ NEW APP VERSION — NO PYZBAR")
 import os
 import cv2
 import numpy as np
@@ -96,3 +97,4 @@ def handle_pdf(message: Message):
 
 print("🤖 Fayda Bot is running...")
 bot.infinity_polling(timeout=30, long_polling_timeout=30)
+
