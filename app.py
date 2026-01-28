@@ -95,11 +95,14 @@ def find_qr(img: Image.Image):
 def process_pdf(pdf_bytes, user_id):
     # 1️⃣ Convert first page of PDF to image
     images = convert_from_bytes(
-        pdf_bytes,
-        dpi=300,
-        first_page=1,
-        last_page=1
-    )
+    pdf_bytes,
+    dpi=200,
+    first_page=1,
+    last_page=1,
+    poppler_path="/usr/bin"
+)
+if not images:
+    return None, "❌ PDF conversion failed (poppler issue)"
 
     if not images:
         return None, "❌ Could not read PDF"
@@ -213,4 +216,5 @@ if __name__ == "__main__":
     else:
         bot.remove_webhook()
         bot.infinity_polling()
+
 
