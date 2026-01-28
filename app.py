@@ -1,10 +1,9 @@
 import os
-import io
+import cv2
+import numpy as np
 import telebot
 from telebot.types import Message
 from pdf2image import convert_from_bytes
-from PIL import Image
-from pyzbar.pyzbar import decode
 
 # ================== CONFIG ==================
 
@@ -19,30 +18,34 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
 def extract_qr_from_pdf(pdf_bytes: bytes):
     """
-    Converts first page of PDF to image and scans for QR
-    Returns: (qr_data or None, error_message or None)
+    Converts first page of PDF to image and extracts QR using OpenCV
     """
     try:
         images = convert_from_bytes(
             pdf_bytes,
-            dpi=150,                 # low DPI = faster on Render Free
+            dpi=200,
             first_page=1,
             last_page=1,
-            poppler_path="/usr/bin"  # REQUIRED on Render
+            poppler_path="/usr/bin"
         )
     except Exception as e:
         return None, f"❌ PDF conversion failed: {e}"
 
     if not images:
-        return None, "❌ PDF conversion failed (no image generated)"
+        return None, "❌ No image generated from PDF"
 
-    img = images[0]
-    qr_codes = decode(img)
+    # Convert PIL image → OpenCV format
+    pil_img = images[0].convert("RGB")
+    img_np = np.array(pil_img)
+    img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-    if not qr_codes:
+    detector = cv2.QRCodeDetector()
+    data, _, _ = detector.detectAndDecode(img_cv)
+
+    if not data:
         return None, "❌ QR code not found in PDF"
 
-    return qr_codes[0].data.decode("utf-8"), None
+    return data, None
 
 # ================== BOT HANDLERS ==================
 
@@ -50,7 +53,7 @@ def extract_qr_from_pdf(pdf_bytes: bytes):
 def start(message: Message):
     bot.reply_to(
         message,
-        "👋 <b>Welcome to Fayda ID Bot</b>\n\n"
+        "👋 <b>Fayda ID Bot</b>\n\n"
         "📄 Send your Fayda PDF and I will extract the QR code."
     )
 
