@@ -1,11 +1,11 @@
 services:
-  - type: worker
+  - type: web
     name: fayda-id-bot
     env: python
     region: oregon
-    buildCommand: pip install -r requirements.txt
-    startCommand: python keep_alive.py
     plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
     envVars:
       - key: BOT_TOKEN
         sync: false
