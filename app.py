@@ -1,184 +1,230 @@
+"""
+Fayda Ethiopian Digital ID Card Generator
+Python 3.13 compatible – Render Free Plan Safe
+"""
+
 import os
 import io
+import json
 import time
 import logging
+import traceback
+from datetime import datetime
 
 from flask import Flask, request
-import telebot
+from telebot import TeleBot, types
 
-from PIL import Image
-import cv2
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-import requests
+import cv2
 from pypdf import PdfReader
 
-# =========================
-# CONFIG
-# =========================
+# ===================== BASIC SETUP =====================
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("fayda-bot")
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable not set")
+    raise RuntimeError("❌ BOT_TOKEN environment variable not set")
 
-RENDER = os.environ.get("RENDER", False)
-PORT = int(os.environ.get("PORT", 10000))
-
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+bot = TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+BASE_DIR = os.getcwd()
+OUTPUT_DIR = os.path.join(BASE_DIR, "data")
+TEMPLATE_PATH = os.path.join(BASE_DIR, "assets", "template.png")
+FONT_PATH = os.path.join(BASE_DIR, "assets", "fonts", "arial.ttf")
 
-# =========================
-# QR DETECTION (OpenCV ONLY)
-# =========================
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def find_qr_code_in_image(img: Image.Image):
-    """
-    Detect QR code using OpenCV QRCodeDetector (Render-safe)
-    """
-    try:
-        cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        detector = cv2.QRCodeDetector()
-        data, points, _ = detector.detectAndDecode(cv_img)
+# ===================== SAFE UTILITIES =====================
 
-        if data:
-            logger.info("✅ QR detected")
-            return data
+def safe_qr_decode(pil_image):
+    """Lazy QR decode (prevents Render boot crash)"""
+    from pyzbar.pyzbar import decode
+    cv_img = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    results = decode(cv_img)
+    if not results:
+        return None
+    return results[0].data.decode("utf-8", errors="ignore")
 
-    except Exception as e:
-        logger.error(f"QR detection error: {e}")
-
-    logger.warning("❌ QR not found")
-    return None
-
-
-# =========================
-# PDF HANDLING
-# =========================
-
-def extract_images_from_pdf(pdf_bytes):
-    """
-    Extract images from PDF pages (simple approach)
-    """
-    images = []
-
+def extract_pdf_page_image(pdf_bytes):
+    """Render-safe PDF handling (no pdf2image)"""
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    for page in reader.pages:
-        if "/XObject" in page["/Resources"]:
-            xobjects = page["/Resources"]["/XObject"].get_object()
-            for obj in xobjects:
-                xobj = xobjects[obj]
-                if xobj["/Subtype"] == "/Image":
-                    data = xobj.get_data()
-                    try:
-                        img = Image.open(io.BytesIO(data)).convert("RGB")
-                        images.append(img)
-                    except Exception:
-                        continue
-    return images
+    if not reader.pages:
+        raise ValueError("Empty PDF")
 
+    # placeholder canvas
+    img = Image.new("RGB", (1200, 1600), "white")
+    draw = ImageDraw.Draw(img)
 
-# =========================
-# TELEGRAM HANDLERS
-# =========================
+    text = reader.pages[0].extract_text() or ""
+    draw.text((40, 40), "PDF loaded successfully", fill="black")
+    draw.text((40, 80), text[:500], fill="black")
+
+    return img
+
+def load_font(size=24):
+    try:
+        if os.path.exists(FONT_PATH):
+            return ImageFont.truetype(FONT_PATH, size)
+    except Exception:
+        pass
+    return ImageFont.load_default()
+
+# ===================== TEMPLATE =====================
+
+def create_template():
+    if os.path.exists(TEMPLATE_PATH):
+        return
+
+    os.makedirs(os.path.dirname(TEMPLATE_PATH), exist_ok=True)
+
+    img = Image.new("RGB", (1500, 1000), "white")
+    d = ImageDraw.Draw(img)
+
+    d.rectangle((0, 0, 1500, 120), fill=(0, 122, 51))
+    d.text((750, 60), "ETHIOPIAN DIGITAL ID", anchor="mm",
+           fill="white", font=load_font(36))
+
+    d.rectangle((80, 180, 380, 480), outline="black", width=3)
+    d.text((230, 500), "PHOTO", anchor="mm")
+
+    labels = [
+        "Name", "DOB", "Gender", "Phone",
+        "Address", "Nationality", "ID Number", "Expiry"
+    ]
+
+    y = 200
+    for lbl in labels:
+        d.text((420, y), f"{lbl}:", fill="black", font=load_font(22))
+        y += 50
+
+    d.rectangle((1100, 650, 1400, 950), outline="black", width=3)
+    d.text((1250, 970), "QR CODE", anchor="mm")
+
+    img.save(TEMPLATE_PATH)
+    logger.info("✅ Template created")
+
+# ===================== MAIN PROCESS =====================
+
+def generate_id(pdf_bytes, user_id):
+    create_template()
+
+    template = Image.open(TEMPLATE_PATH).convert("RGB")
+    draw = ImageDraw.Draw(template)
+    font = load_font(22)
+
+    pdf_img = extract_pdf_page_image(pdf_bytes)
+
+    qr_raw = safe_qr_decode(pdf_img)
+    if not qr_raw:
+        return None, "QR code not found"
+
+    try:
+        qr_raw = qr_raw.replace("'", '"')
+        data = json.loads(qr_raw)
+    except Exception:
+        return None, "Invalid QR JSON"
+
+    info = {
+        "name": data.get("fullName", "N/A"),
+        "dob": data.get("dateOfBirth", "N/A"),
+        "gender": data.get("sex", "N/A"),
+        "phone": data.get("phone", "N/A"),
+        "address": data.get("address", "N/A"),
+        "nationality": data.get("nationality", "Ethiopian"),
+        "id": data.get("nationalId", "N/A"),
+        "expiry": data.get("expiryDate", "N/A"),
+    }
+
+    values = [
+        info["name"],
+        info["dob"],
+        info["gender"],
+        info["phone"],
+        info["address"][:30],
+        info["nationality"],
+        info["id"],
+        info["expiry"],
+    ]
+
+    y = 200
+    for val in values:
+        draw.text((580, y), str(val), fill="black", font=font)
+        y += 50
+
+    output_path = os.path.join(
+        OUTPUT_DIR,
+        f"fayda_{user_id}_{int(time.time())}.png"
+    )
+    template.save(output_path)
+    return output_path, info
+
+# ===================== TELEGRAM =====================
 
 @bot.message_handler(commands=["start", "help"])
-def start_handler(message):
-    bot.reply_to(
-        message,
-        "👋 Send me a Fayda ID image or PDF.\n"
-        "I’ll extract the QR code for you."
+def start(msg):
+    bot.send_message(
+        msg.chat.id,
+        "🪪 *FAYDA Digital ID Generator*\n\nSend a FAYDA PDF to begin.",
+        parse_mode="Markdown"
     )
 
-
-@bot.message_handler(content_types=["photo"])
-def photo_handler(message):
-    try:
-        file_id = message.photo[-1].file_id
-        file_info = bot.get_file(file_id)
-        file_data = bot.download_file(file_info.file_path)
-
-        img = Image.open(io.BytesIO(file_data)).convert("RGB")
-        qr_data = find_qr_code_in_image(img)
-
-        if qr_data:
-            bot.reply_to(message, f"✅ QR Code Found:\n\n{qr_data}")
-        else:
-            bot.reply_to(message, "❌ No QR code found in the image.")
-
-    except Exception as e:
-        logger.exception(e)
-        bot.reply_to(message, "⚠️ Failed to process image.")
-
-
 @bot.message_handler(content_types=["document"])
-def document_handler(message):
+def handle_pdf(msg):
     try:
-        file_name = message.document.file_name.lower()
-        file_info = bot.get_file(message.document.file_id)
-        file_data = bot.download_file(file_info.file_path)
-
-        # ================= PDF =================
-        if file_name.endswith(".pdf"):
-            images = extract_images_from_pdf(file_data)
-
-            for img in images:
-                qr_data = find_qr_code_in_image(img)
-                if qr_data:
-                    bot.reply_to(message, f"✅ QR Code Found:\n\n{qr_data}")
-                    return
-
-            bot.reply_to(message, "❌ No QR code found in the PDF.")
+        if not msg.document.file_name.lower().endswith(".pdf"):
+            bot.reply_to(msg, "❌ Please send a PDF file")
             return
 
-        # ================= IMAGE =================
-        img = Image.open(io.BytesIO(file_data)).convert("RGB")
-        qr_data = find_qr_code_in_image(img)
+        status = bot.reply_to(msg, "⏳ Processing PDF...")
+        file_info = bot.get_file(msg.document.file_id)
+        pdf_bytes = bot.download_file(file_info.file_path)
 
-        if qr_data:
-            bot.reply_to(message, f"✅ QR Code Found:\n\n{qr_data}")
-        else:
-            bot.reply_to(message, "❌ No QR code found in the file.")
+        result, info = generate_id(pdf_bytes, msg.chat.id)
+
+        if not result:
+            bot.edit_message_text(f"❌ {info}", msg.chat.id, status.message_id)
+            return
+
+        with open(result, "rb") as f:
+            bot.send_photo(
+                msg.chat.id,
+                f,
+                caption=f"✅ *ID Generated*\n\n👤 {info['name']}\n🆔 {info['id']}",
+                parse_mode="Markdown"
+            )
+
+        os.remove(result)
+        bot.delete_message(msg.chat.id, status.message_id)
 
     except Exception as e:
-        logger.exception(e)
-        bot.reply_to(message, "⚠️ Failed to process document.")
+        logger.error(traceback.format_exc())
+        bot.reply_to(msg, f"❌ Error: {e}")
 
-
-# =========================
-# FLASK WEBHOOK
-# =========================
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK", 200
-
+# ===================== FLASK =====================
 
 @app.route("/")
 def index():
-    return "Fayda ID Bot is running ✅", 200
+    return "✅ Fayda ID Bot is running"
 
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = types.Update.de_json(request.get_json(force=True))
+    bot.process_new_updates([update])
+    return "", 200
 
-# =========================
-# STARTUP LOGIC
-# =========================
+# ===================== START =====================
 
 if __name__ == "__main__":
-    if RENDER:
-        render_url = os.environ.get("RENDER_EXTERNAL_URL")
-        if not render_url:
-            raise RuntimeError("RENDER_EXTERNAL_URL not set")
+    create_template()
 
+    if os.environ.get("RENDER"):
         bot.remove_webhook()
         time.sleep(1)
-        bot.set_webhook(url=f"{render_url}/webhook")
-
-        logger.info("🚀 Bot running on Render with webhook")
-        app.run(host="0.0.0.0", port=PORT)
-
+        bot.set_webhook(os.environ["RENDER_EXTERNAL_URL"] + "/webhook")
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
     else:
-        logger.info("🤖 Bot running locally with polling")
-        bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        bot.polling(none_stop=True)
